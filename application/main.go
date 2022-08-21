@@ -3,10 +3,13 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gocarina/gocsv"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -125,15 +128,16 @@ func createObjects(db *sql.DB, objs []*DataObject) {
 	}
 }
 
+func exposePrometheusServer() {
+
+	dataBaseMetrics[0].With(prometheus.Labels{"elements": "30"}).Set(223.5)
+
+	http.Handle("/metrics", promhttp.Handler())
+	http.ListenAndServe(":2112", nil)
+}
+
 func main() {
-	objs := getObjectsFromCsv()
-	db := connectToDb()
-	defer db.Close()
 
-	createTable(db)
-
-	fmt.Printf("Starting insertion on database")
-	createObjects(db, objs)
-	fmt.Printf("Finished insertion on database")
+	exposePrometheusServer()
 
 }
