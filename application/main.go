@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gocarina/gocsv"
@@ -129,15 +131,47 @@ func createObjects(db *sql.DB, objs []*DataObject) {
 }
 
 func exposePrometheusServer() {
-
-	dataBaseMetrics[0].With(prometheus.Labels{"elements": "30"}).Set(223.5)
-
 	http.Handle("/metrics", promhttp.Handler())
 	http.ListenAndServe(":2112", nil)
 }
 
+func getInsertMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
+	cleanDatabase(db)
+	begin := time.Now()
+	createObjects(db, objs[:numberOfElements])
+	end := time.Now()
+
+	dataBaseMetrics[INSERT_METRIC].With(prometheus.Labels{"elements": fmt.Sprintf("%d", numberOfElements)}).Set(end.Sub(begin).Seconds())
+}
+
+func cleanDatabase(db *sql.DB) {
+	dropTable(db)
+	createTable(db)
+}
+
 func main() {
+	db := connectToDb()
+	defer db.Close()
 
-	exposePrometheusServer()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		exposePrometheusServer()
+		wg.Done()
+	}()
 
+	cleanDatabase(db)
+	objs := getObjectsFromCsv()
+
+	totalElementsOnCsv := len(objs)
+
+	firstBatch := int(totalElementsOnCsv / 3)    // 33% of elements in database
+	secondBatch := int(totalElementsOnCsv/3) * 2 // 66% of elements in database
+	thirdBatch := totalElementsOnCsv             // 100% of database
+
+	getInsertMetricsFor(db, objs, firstBatch)
+	getInsertMetricsFor(db, objs, secondBatch)
+	getInsertMetricsFor(db, objs, thirdBatch)
+
+	wg.Wait()
 }

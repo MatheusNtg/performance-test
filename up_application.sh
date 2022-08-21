@@ -6,7 +6,7 @@ POD_METRICS_PORT=2112
 LOCAL_METRICS_PORT=3000
 
 # Kill the process that is listen on LOCAL_METRICS_PORT
-kill $( lsof -i:$LOCAL_METRICS_PORT -t)
+kill $( lsof -i:$LOCAL_METRICS_PORT -t) || true
 
 minikube image build -t my-golang-app:latest ./application
 
