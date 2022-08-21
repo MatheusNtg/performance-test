@@ -130,6 +130,15 @@ func createObjects(db *sql.DB, objs []*DataObject) {
 	}
 }
 
+func readNObjectsFromDB(db *sql.DB, N int) {
+	sqlStmt := fmt.Sprintf("SELECT * FROM %s LIMIT %d", tableName, N)
+
+	_, err := db.Query(sqlStmt)
+	if err != nil {
+		panic(err)
+	}
+}
+
 func exposePrometheusServer() {
 	http.Handle("/metrics", promhttp.Handler())
 	http.ListenAndServe(":2112", nil)
@@ -142,6 +151,14 @@ func getInsertMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
 	end := time.Now()
 
 	dataBaseMetrics[INSERT_METRIC].With(prometheus.Labels{"elements": fmt.Sprintf("%d", numberOfElements)}).Set(end.Sub(begin).Seconds())
+}
+
+func getReadMetricsFor(db *sql.DB, numberOfElements int) {
+	begin := time.Now()
+	readNObjectsFromDB(db, numberOfElements)
+	end := time.Now()
+
+	dataBaseMetrics[READ_METRIC].With(prometheus.Labels{"elements": fmt.Sprintf("%d", numberOfElements)}).Set(end.Sub(begin).Seconds())
 }
 
 func cleanDatabase(db *sql.DB) {
@@ -172,6 +189,13 @@ func main() {
 	getInsertMetricsFor(db, objs, firstBatch)
 	getInsertMetricsFor(db, objs, secondBatch)
 	getInsertMetricsFor(db, objs, thirdBatch)
+
+	// Here we have the 100% of elements inserted on database
+	// So we can perform the read operation just limiting the
+	// amount of elements returneds
+	getReadMetricsFor(db, firstBatch)
+	getReadMetricsFor(db, secondBatch)
+	getReadMetricsFor(db, thirdBatch)
 
 	wg.Wait()
 }

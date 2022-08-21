@@ -3,7 +3,7 @@ set -eoux
 DATABASE_PASSWORD=$(kubectl get secret --namespace default my-bd-mysql -o jsonpath="{.data.mysql-root-password}" | base64 -d)
 DEPLOYMENT_FILE="./application/deployment.yaml"
 POD_METRICS_PORT=2112
-LOCAL_METRICS_PORT=3000
+LOCAL_METRICS_PORT=7000
 
 # Kill the process that is listen on LOCAL_METRICS_PORT
 kill $( lsof -i:$LOCAL_METRICS_PORT -t) || true

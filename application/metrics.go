@@ -7,6 +7,7 @@ import (
 
 const (
 	INSERT_METRIC = "insert"
+	READ_METRIC   = "read"
 )
 
 var (
@@ -14,6 +15,12 @@ var (
 		INSERT_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "database_insert",
 			Help: "time (in seconds) taken to insert X elements on the database",
+		}, []string{
+			"elements",
+		}),
+		READ_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "database_read",
+			Help: "time (in seconds) taken to read X elements on the database",
 		}, []string{
 			"elements",
 		}),
