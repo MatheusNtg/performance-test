@@ -1,15 +1,19 @@
 set -eoux
 
 DATABASE_PASSWORD=$(kubectl get secret --namespace default my-bd-mysql -o jsonpath="{.data.mysql-root-password}" | base64 -d)
+DEPLOYMENT_FILE="./application/deployment.yaml"
+POD_METRICS_PORT=2112
+LOCAL_METRICS_PORT=3000
 
-# Builds a new image of our application
-docker build -t my-golang-app:0.1.0 ./application
+# Kill the process that is listen on LOCAL_METRICS_PORT
+kill $( lsof -i:$LOCAL_METRICS_PORT -t)
 
-# Tags it to the image that goes to the registry
-docker tag my-golang-app:0.1.0 localhost:5000/my-golang-app
+minikube image build -t my-golang-app:latest ./application
 
-# Pushes our image to the registry
-docker push localhost:5000/my-golang-app
+kubectl delete -f $DEPLOYMENT_FILE || true
+kubectl apply  -f $DEPLOYMENT_FILE
 
-# Creates our pod to debug the application
-kubectl run my-bd-mysql-client --rm --tty -i --restart='Never' --image=localhost:5000/my-golang-app --namespace default --env MYSQL_ROOT_PASSWORD=$DATABASE_PASSWORD --env MYSQL_SERVICE_ADDRS=$DATABASE_ADDRS --command -- bash
+kubectl wait --for=condition=Ready pod/go-client 
+
+# Exposing the pod metrics port to our localhost
+kubectl port-forward pod/go-client $LOCAL_METRICS_PORT:$POD_METRICS_PORT &
