@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: go-client
+  labels:
+    app.kubernetes.io/name: my-go-app
+spec:
+  containers:
+  - name: my-go-client
+    image: my-golang-app:latest
+    ports:
+      - containerPort: 2112
+        name: promet-port
+    imagePullPolicy: IfNotPresent
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: goclientservice
+spec:
+  selector:
+    app.kubernetes.io/name: my-go-app
+  ports:
+  - name: promet-serv-port
+    protocol: TCP
+    port: 2112
+    targetPort: promet-port
