@@ -12,12 +12,14 @@ import (
 	"github.com/gocarina/gocsv"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/shirou/gopsutil/v3/cpu"
 )
 
 var (
 	datasetPath      = "./dataset/neo.csv"
 	databasePassword = os.Getenv("MYSQL_ROOT_PASSWORD")
 	databaseAddrs    = os.Getenv("MYSQL_SERVICE_ADDRS")
+	databaseReplicas = os.Getenv("DATABASE_REPLICAS")
 	databaseName     = "my_database" // This is the default database created when we deploy the mySql
 	tableName        = "nearest_objects"
 )
@@ -141,24 +143,38 @@ func readNObjectsFromDB(db *sql.DB, N int) {
 
 func exposePrometheusServer() {
 	http.Handle("/metrics", promhttp.Handler())
-	http.ListenAndServe(":2112", nil)
+	err := http.ListenAndServe(":2112", nil)
+	if err != nil {
+		fmt.Printf("ERROR: Failed to serve a prometheus server: %s\n", err)
+	}
 }
 
 func getInsertMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
+	fmt.Printf("Starting metrics for INSERT with %d objects\n", numberOfElements)
 	cleanDatabase(db)
 	begin := time.Now()
 	createObjects(db, objs[:numberOfElements])
 	end := time.Now()
 
-	dataBaseMetrics[INSERT_METRIC].With(prometheus.Labels{"elements": fmt.Sprintf("%d", numberOfElements)}).Set(end.Sub(begin).Seconds())
+	dataBaseMetrics[INSERT_METRIC].With(prometheus.Labels{
+		"elements": fmt.Sprintf("%d", numberOfElements),
+		"replicas": databaseReplicas,
+	}).Set(end.Sub(begin).Seconds())
 }
 
 func getReadMetricsFor(db *sql.DB, numberOfElements int) {
+	fmt.Printf("Starting metrics for READ with %d objects\n", numberOfElements)
+
 	begin := time.Now()
 	readNObjectsFromDB(db, numberOfElements)
 	end := time.Now()
 
-	dataBaseMetrics[READ_METRIC].With(prometheus.Labels{"elements": fmt.Sprintf("%d", numberOfElements)}).Set(end.Sub(begin).Seconds())
+	dataBaseMetrics[READ_METRIC].With(
+		prometheus.Labels{
+			"elements": fmt.Sprintf("%d", numberOfElements),
+			"replicas": databaseReplicas,
+		},
+	).Set(end.Sub(begin).Seconds())
 }
 
 func cleanDatabase(db *sql.DB) {
@@ -185,17 +201,60 @@ func main() {
 	firstBatch := int(totalElementsOnCsv / 3)    // 33% of elements in database
 	secondBatch := int(totalElementsOnCsv/3) * 2 // 66% of elements in database
 	thirdBatch := totalElementsOnCsv             // 100% of database
-
+	insertDoneChannel := make(chan bool)
+	insertDoneChannel <- false
+	go func() {
+		fmt.Printf("Starting proffiling in write\n")
+		for {
+			result, _ := cpu.Percent(0, false)
+			fmt.Printf("Here is the result: %v\n", result)
+			systemMetrics[CPU_METRIC].With(
+				prometheus.Labels{
+					"replicas":  databaseReplicas,
+					"operation": "insert",
+					"time":      time.Now().String(),
+				},
+			).Set(result[0])
+			done := <-insertDoneChannel
+			if done {
+				fmt.Printf("Stopping proffiling on write\n")
+				break
+			}
+		}
+	}()
 	getInsertMetricsFor(db, objs, firstBatch)
 	getInsertMetricsFor(db, objs, secondBatch)
 	getInsertMetricsFor(db, objs, thirdBatch)
+	insertDoneChannel <- true
 
+	readDoneChannel := make(chan bool)
+	readDoneChannel <- false
+	go func() {
+		fmt.Printf("Starting proffiling in read\n")
+		for {
+			result, _ := cpu.Percent(0, false)
+			fmt.Printf("Here is the result: %v\n", result)
+			systemMetrics[CPU_METRIC].With(
+				prometheus.Labels{
+					"replicas":  databaseReplicas,
+					"operation": "read",
+					"time":      time.Now().String(),
+				},
+			).Set(result[0])
+			done := <-readDoneChannel
+			if done {
+				fmt.Printf("Stopping proffiling on read\n")
+				break
+			}
+		}
+	}()
 	// Here we have the 100% of elements inserted on database
 	// So we can perform the read operation just limiting the
 	// amount of elements returneds
 	getReadMetricsFor(db, firstBatch)
 	getReadMetricsFor(db, secondBatch)
 	getReadMetricsFor(db, thirdBatch)
+	readDoneChannel <- true
 
 	wg.Wait()
 }

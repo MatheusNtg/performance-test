@@ -13,6 +13,11 @@ spec:
         name: promet-port
     imagePullPolicy: IfNotPresent
     env:
+      - name:  DATABASE_REPLICAS
+        valueFrom:
+          configMapKeyRef:
+            name:  test-config
+            key: database.replicas
       - name:  MYSQL_ROOT_PASSWORD
         valueFrom:
           secretKeyRef:
