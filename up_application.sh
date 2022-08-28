@@ -17,6 +17,7 @@ DEPLOYMENT_FILE="./application/deployment.yaml"
 DATABASE_PASSWORD="SuperSafePassword123@!"
 POD_METRICS_PORT=2112
 LOCAL_METRICS_PORT=7000
+CONFIGMAP_NAME="test-config"
 
 main() {
     local number_of_replicas=${1:-3}
@@ -54,6 +55,12 @@ main() {
     minikube image build -t my-golang-app:latest ./application
 
     kubectl delete -f $DEPLOYMENT_FILE || true
+    if [[ $(kubectl get cm | grep $CONFIGMAP_NAME | wc -l) == 0 ]]; then
+        kubectl create configmap $CONFIGMAP_NAME --from-literal=database.replicas=$number_of_replicas
+    else
+        kubectl delete cm $CONFIGMAP_NAME
+        kubectl create configmap $CONFIGMAP_NAME --from-literal=database.replicas=$number_of_replicas
+    fi
     kubectl apply  -f $DEPLOYMENT_FILE
 
     kubectl wait --for=condition=Ready pod/go-client 
