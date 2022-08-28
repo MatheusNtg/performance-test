@@ -1,0 +1,5 @@
+architecture: replication
+metrics:
+  enabled: true
+auth:
+  rootPassword: "SuperSafePassword123@!"
