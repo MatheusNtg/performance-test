@@ -19,7 +19,7 @@ spec:
             name:  my-bd-mysql
             key:  mysql-root-password
       - name:  MYSQL_SERVICE_ADDRS
-        value: "my-bd-mysql.default.svc.cluster.local:3306"
+        value: "my-bd-mysql-primary.default.svc.cluster.local:3306"
 ---
 apiVersion: v1
 kind: Service

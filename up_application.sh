@@ -25,13 +25,27 @@ main() {
         echo "Current number of replicas is different of the desired"
         echo "Fixing that"
         local timeout=$(($number_of_replicas/3))
-        helm delete $DATABASE_NAME || true
-        helm install $DATABASE_NAME \
-            -f values.yaml \
-            --set secondary.replicaCount=$number_of_replicas \
-            --timeout $(($timeout*300))s \
-            --wait \
-            bitnami/mysql
+
+
+        if [[ $(kubectl get pods | grep "$DATABASE_NAME" | wc -l) > 0 ]]; then
+            echo "Upgrading current installation"
+            helm upgrade $DATABASE_NAME bitnami/mysql \
+                -f values.yaml \
+                --set secondary.replicaCount=$number_of_replicas \
+                --timeout $(($timeout*300))s \
+                --wait
+        fi
+
+        if [[ $(kubectl get pods | grep "$DATABASE_NAME" | wc -l) == 0 ]]; then
+            echo "Installing from the ground"
+            helm delete $DATABASE_NAME 
+            helm install $DATABASE_NAME \
+                -f values.yaml \
+                --set secondary.replicaCount=$number_of_replicas \
+                --timeout $(($timeout*300))s \
+                --wait \
+                bitnami/mysql | tee "instructions.txt"
+        fi
     fi
 
     # Kill the process that is listen on LOCAL_METRICS_PORT
