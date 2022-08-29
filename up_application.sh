@@ -1,15 +1,24 @@
 set -eoux
 
+FIRST_INSTALLATION=false
+
 echo "Checking if docker service is running"
 if [[ $(sudo service docker status) == *"is not running" ]]; then
     echo "Docker service is not running, starting docker service"
     sudo service docker start
+    FIRST_INSTALLATION=true
 fi
 
 echo "Checking if minikube is started"
 if [[ $(minikube status) == *"Stopped" ]]; then
     echo "Minikube is not started, starting it"
     minikube start
+fi
+
+if [[ $FIRST_INSTALLATION == true ]]; then
+    kubectl delete statefulset.apps/my-bd-mysql-primary
+    kubectl delete statefulset.apps/my-bd-mysql-secondary
+    kubectl delete pvc --all
 fi
 
 DATABASE_NAME="my-bd"
@@ -45,7 +54,7 @@ main() {
                 --set secondary.replicaCount=$number_of_replicas \
                 --timeout $(($timeout*300))s \
                 --wait \
-                bitnami/mysql | tee "instructions.txt"
+                bitnami/mysql | tee instructions.txt
         fi
     fi
 
