@@ -12,7 +12,8 @@ import (
 	"github.com/gocarina/gocsv"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/cpu"
+	"github.com/shirou/gopsutil/mem"
 )
 
 var (
@@ -142,11 +143,13 @@ func readNObjectsFromDB(db *sql.DB, N int) {
 }
 
 func exposePrometheusServer() {
+	fmt.Printf("Exposing prometheus server\n")
 	http.Handle("/metrics", promhttp.Handler())
-	err := http.ListenAndServe(":2112", nil)
-	if err != nil {
-		fmt.Printf("ERROR: Failed to serve a prometheus server: %s\n", err)
-	}
+	_ = http.ListenAndServe(":2112", nil)
+	// if err != nil {
+	// 	fmt.Printf("ERROR: Failed to serve a prometheus server: %s\n", err)
+	// }
+	fmt.Printf("Successfully exposed prometheus server\n")
 }
 
 func getInsertMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
@@ -178,8 +181,10 @@ func getReadMetricsFor(db *sql.DB, numberOfElements int) {
 }
 
 func cleanDatabase(db *sql.DB) {
+	fmt.Printf("Cleaning database\n")
 	dropTable(db)
 	createTable(db)
+	fmt.Printf("Successfully cleaned database\n")
 }
 
 func main() {
@@ -194,67 +199,70 @@ func main() {
 	}()
 
 	cleanDatabase(db)
+	fmt.Printf("Getting objects from csv\n")
 	objs := getObjectsFromCsv()
+	fmt.Printf("Successfully get objects from csv\n")
 
 	totalElementsOnCsv := len(objs)
 
 	firstBatch := int(totalElementsOnCsv / 3)    // 33% of elements in database
 	secondBatch := int(totalElementsOnCsv/3) * 2 // 66% of elements in database
 	thirdBatch := totalElementsOnCsv             // 100% of database
-	insertDoneChannel := make(chan bool)
-	insertDoneChannel <- false
+	insertTicker := time.NewTicker(100 * time.Millisecond)
 	go func() {
 		fmt.Printf("Starting proffiling in write\n")
-		for {
+		for range insertTicker.C {
 			result, _ := cpu.Percent(0, false)
-			fmt.Printf("Here is the result: %v\n", result)
 			systemMetrics[CPU_METRIC].With(
 				prometheus.Labels{
 					"replicas":  databaseReplicas,
 					"operation": "insert",
-					"time":      time.Now().String(),
 				},
 			).Set(result[0])
-			done := <-insertDoneChannel
-			if done {
-				fmt.Printf("Stopping proffiling on write\n")
-				break
-			}
+			memStat, _ := mem.VirtualMemory()
+			systemMetrics[MEM_METRIC].With(
+				prometheus.Labels{
+					"replicas":  databaseReplicas,
+					"operation": "insert",
+				},
+			).Set(memStat.UsedPercent)
 		}
 	}()
+	fmt.Printf("Starting insert metrics\n")
 	getInsertMetricsFor(db, objs, firstBatch)
 	getInsertMetricsFor(db, objs, secondBatch)
 	getInsertMetricsFor(db, objs, thirdBatch)
-	insertDoneChannel <- true
+	insertTicker.Stop()
 
-	readDoneChannel := make(chan bool)
-	readDoneChannel <- false
+	readTicker := time.NewTicker(100 * time.Millisecond)
 	go func() {
 		fmt.Printf("Starting proffiling in read\n")
-		for {
+		for range readTicker.C {
 			result, _ := cpu.Percent(0, false)
-			fmt.Printf("Here is the result: %v\n", result)
 			systemMetrics[CPU_METRIC].With(
 				prometheus.Labels{
 					"replicas":  databaseReplicas,
 					"operation": "read",
-					"time":      time.Now().String(),
 				},
 			).Set(result[0])
-			done := <-readDoneChannel
-			if done {
-				fmt.Printf("Stopping proffiling on read\n")
-				break
-			}
+			memStat, _ := mem.VirtualMemory()
+			systemMetrics[MEM_METRIC].With(
+				prometheus.Labels{
+					"replicas":  databaseReplicas,
+					"operation": "read",
+				},
+			).Set(memStat.UsedPercent)
 		}
 	}()
 	// Here we have the 100% of elements inserted on database
 	// So we can perform the read operation just limiting the
 	// amount of elements returneds
+	fmt.Printf("Starting read metrics\n")
 	getReadMetricsFor(db, firstBatch)
 	getReadMetricsFor(db, secondBatch)
 	getReadMetricsFor(db, thirdBatch)
-	readDoneChannel <- true
+	time.Sleep(5 * time.Second) // We sleep one second to retrieve CPU usage metrics
+	readTicker.Stop()
 
 	wg.Wait()
 }

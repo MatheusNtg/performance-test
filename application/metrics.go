@@ -9,6 +9,7 @@ const (
 	INSERT_METRIC = "insert"
 	READ_METRIC   = "read"
 	CPU_METRIC    = "cpu"
+	MEM_METRIC    = "memory"
 )
 
 var (
@@ -35,7 +36,13 @@ var (
 		}, []string{
 			"replicas",
 			"operation",
-			"time",
+		}),
+		MEM_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "system_memory",
+			Help: "memory usage of a given operation",
+		}, []string{
+			"replicas",
+			"operation",
 		}),
 	}
 )
