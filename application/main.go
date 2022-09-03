@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync"
@@ -152,7 +153,16 @@ func exposePrometheusServer() {
 	fmt.Printf("Successfully exposed prometheus server\n")
 }
 
-func getInsertMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
+func updateNObjectsFromDb(db *sql.DB, elements []*DataObject) {
+	randNumber := rand.Float64() * 100
+	stmt := fmt.Sprintf("UPDATE %s SET relative_velocity = %f", tableName, randNumber)
+	_, err := db.Exec(stmt)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func getInsertAndUpdateMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
 	fmt.Printf("Starting metrics for INSERT with %d objects\n", numberOfElements)
 	cleanDatabase(db)
 	begin := time.Now()
@@ -160,6 +170,15 @@ func getInsertMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
 	end := time.Now()
 
 	dataBaseMetrics[INSERT_METRIC].With(prometheus.Labels{
+		"elements": fmt.Sprintf("%d", numberOfElements),
+		"replicas": databaseReplicas,
+	}).Set(end.Sub(begin).Seconds())
+
+	begin = time.Now()
+	updateNObjectsFromDb(db, objs[:numberOfElements])
+	end = time.Now()
+
+	dataBaseMetrics[UPDATE_METRIC].With(prometheus.Labels{
 		"elements": fmt.Sprintf("%d", numberOfElements),
 		"replicas": databaseReplicas,
 	}).Set(end.Sub(begin).Seconds())
@@ -229,9 +248,9 @@ func main() {
 		}
 	}()
 	fmt.Printf("Starting insert metrics\n")
-	getInsertMetricsFor(db, objs, firstBatch)
-	getInsertMetricsFor(db, objs, secondBatch)
-	getInsertMetricsFor(db, objs, thirdBatch)
+	getInsertAndUpdateMetricsFor(db, objs, firstBatch)
+	getInsertAndUpdateMetricsFor(db, objs, secondBatch)
+	getInsertAndUpdateMetricsFor(db, objs, thirdBatch)
 	insertTicker.Stop()
 
 	readTicker := time.NewTicker(100 * time.Millisecond)

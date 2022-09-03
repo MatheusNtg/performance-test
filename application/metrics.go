@@ -8,6 +8,7 @@ import (
 const (
 	INSERT_METRIC = "insert"
 	READ_METRIC   = "read"
+	UPDATE_METRIC = "update"
 	CPU_METRIC    = "cpu"
 	MEM_METRIC    = "memory"
 )
@@ -24,6 +25,13 @@ var (
 		READ_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "database_read",
 			Help: "time (in seconds) taken to read X elements on the database",
+		}, []string{
+			"elements",
+			"replicas",
+		}),
+		UPDATE_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "database_update",
+			Help: "time (in seconds) taken to update X elements on the database",
 		}, []string{
 			"elements",
 			"replicas",
