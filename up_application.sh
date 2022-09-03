@@ -1,6 +1,13 @@
 set -eoux
 
 FIRST_INSTALLATION=false
+DATABASE_NAME="my-bd"
+DEPLOYMENT_FILE="./application/deployment.yaml"
+DATABASE_PASSWORD="SuperSafePassword123@!"
+POD_METRICS_PORT=2112
+LOCAL_METRICS_PORT=7000
+CONFIGMAP_NAME="test-config"
+PROMETHEUS_DIR_PATH="$HOME/prometheus-2.38.0.linux-amd64"
 
 echo "Checking if docker service is running"
 if [[ $(sudo service docker status) == *"is not running" ]]; then
@@ -20,13 +27,6 @@ if [[ $FIRST_INSTALLATION == true ]]; then
     kubectl delete statefulset.apps/my-bd-mysql-secondary
     kubectl delete pvc --all
 fi
-
-DATABASE_NAME="my-bd"
-DEPLOYMENT_FILE="./application/deployment.yaml"
-DATABASE_PASSWORD="SuperSafePassword123@!"
-POD_METRICS_PORT=2112
-LOCAL_METRICS_PORT=7000
-CONFIGMAP_NAME="test-config"
 
 main() {
     local number_of_replicas=${1:-3}
@@ -61,7 +61,16 @@ main() {
     # Kill the process that is listen on LOCAL_METRICS_PORT
     kill $( lsof -i:$LOCAL_METRICS_PORT -t) || true
 
+    # Delete prometheus data folder
+    rm -rf $PROMETHEUS_DIR_PATH/data || true
+
+    # Up prometheus
+    (cd $PROMETHEUS_DIR_PATH && ./prometheus &)
     minikube image build -t my-golang-app:latest ./application
+
+    if [[ $(sudo service grafana-server status) == *"not running" ]]; then
+        sudo service grafana-server start
+    fi
 
     kubectl delete -f $DEPLOYMENT_FILE || true
     if [[ $(kubectl get cm | grep $CONFIGMAP_NAME | wc -l) == 0 ]]; then
@@ -76,6 +85,8 @@ main() {
 
     # Exposing the pod metrics port to our localhost
     kubectl port-forward pod/go-client $LOCAL_METRICS_PORT:$POD_METRICS_PORT &
+
+    kubectl logs go-client -f
 }
 
 main $@
