@@ -54,7 +54,7 @@ main() {
                 --set secondary.replicaCount=$number_of_replicas \
                 --timeout $(($timeout*300))s \
                 --wait \
-                bitnami/mysql | tee instructions.txt
+                bitnami/mysql
         fi
     fi
 
