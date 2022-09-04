@@ -18,13 +18,62 @@ import (
 )
 
 var (
-	datasetPath      = "./dataset/neo.csv"
-	databasePassword = os.Getenv("MYSQL_ROOT_PASSWORD")
-	databaseAddrs    = os.Getenv("MYSQL_SERVICE_ADDRS")
-	databaseReplicas = os.Getenv("DATABASE_REPLICAS")
-	databaseName     = "my_database" // This is the default database created when we deploy the mySql
-	tableName        = "nearest_objects"
+	datasetPath           = "./dataset/neo.csv"
+	databasePassword      = os.Getenv("MYSQL_ROOT_PASSWORD")
+	databaseAddrs         = os.Getenv("MYSQL_SERVICE_ADDRS")
+	databaseReplicas      = os.Getenv("DATABASE_REPLICAS")
+	databaseName          = "my_database" // This is the default database created when we deploy the mySql
+	tableName             = "nearest_objects"
+	defaultTickerDuration = 100 * time.Millisecond
 )
+
+func readNObjectsFromDB(db *sql.DB, N int) {
+	sqlStmt := fmt.Sprintf("SELECT * FROM %s LIMIT %d", tableName, N)
+
+	_, err := db.Query(sqlStmt)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func createObjects(db *sql.DB, objs []*DataObject) {
+	tx, err := db.Begin()
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback()
+
+	sqlStmt := fmt.Sprintf(
+		`INSERT INTO %s 
+			(
+				id, 
+				name, 
+				est_diameter_min, 
+				est_diameter_max,
+				relative_velocity,
+				miss_distance,
+				orbiting_body,
+				sentry_object,
+				absolute_magnitude,
+				hazardous
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName,
+	)
+
+	stmt, err := tx.Prepare(sqlStmt)
+	if err != nil {
+		panic(err)
+	}
+	defer stmt.Close()
+
+	for _, obj := range objs {
+		stmt.Exec(obj.Id, obj.Name, obj.MinDiameter, obj.MaxDiameter, obj.RelativeVelocity, obj.MissingDistance, obj.OrbitingBody, obj.SentryObject, obj.AbsoluteMagnitude, obj.Hazardous)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		panic(err)
+	}
+}
 
 type DataObject struct {
 	Id                int     `csv:"id"`
@@ -95,54 +144,6 @@ func dropTable(db *sql.DB) {
 	db.Exec(sqlStmt)
 }
 
-func createObjects(db *sql.DB, objs []*DataObject) {
-	tx, err := db.Begin()
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback()
-
-	sqlStmt := fmt.Sprintf(
-		`INSERT INTO %s 
-			(
-				id, 
-				name, 
-				est_diameter_min, 
-				est_diameter_max,
-				relative_velocity,
-				miss_distance,
-				orbiting_body,
-				sentry_object,
-				absolute_magnitude,
-				hazardous
-			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName,
-	)
-
-	stmt, err := tx.Prepare(sqlStmt)
-	if err != nil {
-		panic(err)
-	}
-	defer stmt.Close()
-
-	for _, obj := range objs {
-		stmt.Exec(obj.Id, obj.Name, obj.MinDiameter, obj.MaxDiameter, obj.RelativeVelocity, obj.MissingDistance, obj.OrbitingBody, obj.SentryObject, obj.AbsoluteMagnitude, obj.Hazardous)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		panic(err)
-	}
-}
-
-func readNObjectsFromDB(db *sql.DB, N int) {
-	sqlStmt := fmt.Sprintf("SELECT * FROM %s LIMIT %d", tableName, N)
-
-	_, err := db.Query(sqlStmt)
-	if err != nil {
-		panic(err)
-	}
-}
-
 func exposePrometheusServer() {
 	fmt.Printf("Exposing prometheus server\n")
 	http.Handle("/metrics", promhttp.Handler())
@@ -162,34 +163,64 @@ func updateNObjectsFromDb(db *sql.DB, elements []*DataObject) {
 	}
 }
 
-func getInsertAndUpdateMetricsFor(db *sql.DB, objs []*DataObject, numberOfElements int) {
+func getSystemMetricsForOperation(numberOfElements int, operation string, ticker *time.Ticker) {
+	go func() {
+		fmt.Printf("Starting proffiling for operation %s\n", operation)
+		for range ticker.C {
+			result, _ := cpu.Percent(0, false)
+			systemMetrics[CPU_METRIC].With(
+				prometheus.Labels{
+					"replicas":  databaseReplicas,
+					"operation": operation,
+				},
+			).Set(result[0])
+			memStat, _ := mem.VirtualMemory()
+			systemMetrics[MEM_METRIC].With(
+				prometheus.Labels{
+					"replicas":  databaseReplicas,
+					"operation": operation,
+				},
+			).Set(memStat.UsedPercent)
+		}
+	}()
+}
+
+func getMetrics(db *sql.DB, objs []*DataObject, numberOfElements int) {
 	fmt.Printf("Starting metrics for INSERT with %d objects\n", numberOfElements)
+	insertTicker := time.NewTicker(defaultTickerDuration)
 	cleanDatabase(db)
+	getSystemMetricsForOperation(numberOfElements, INSERT_METRIC, insertTicker)
 	begin := time.Now()
 	createObjects(db, objs[:numberOfElements])
 	end := time.Now()
+	insertTicker.Stop()
 
 	dataBaseMetrics[INSERT_METRIC].With(prometheus.Labels{
 		"elements": fmt.Sprintf("%d", numberOfElements),
 		"replicas": databaseReplicas,
 	}).Set(end.Sub(begin).Seconds())
 
+	fmt.Printf("Starting metrics for UPDATE with %d objects\n", numberOfElements)
+	updateTicker := time.NewTicker(defaultTickerDuration)
+	getSystemMetricsForOperation(numberOfElements, UPDATE_METRIC, updateTicker)
 	begin = time.Now()
 	updateNObjectsFromDb(db, objs[:numberOfElements])
 	end = time.Now()
+	updateTicker.Stop()
 
 	dataBaseMetrics[UPDATE_METRIC].With(prometheus.Labels{
 		"elements": fmt.Sprintf("%d", numberOfElements),
 		"replicas": databaseReplicas,
 	}).Set(end.Sub(begin).Seconds())
-}
 
-func getReadMetricsFor(db *sql.DB, numberOfElements int) {
 	fmt.Printf("Starting metrics for READ with %d objects\n", numberOfElements)
-
-	begin := time.Now()
+	readTicker := time.NewTicker(defaultTickerDuration)
+	getSystemMetricsForOperation(numberOfElements, READ_METRIC, readTicker)
+	begin = time.Now()
 	readNObjectsFromDB(db, numberOfElements)
-	end := time.Now()
+	end = time.Now()
+	time.Sleep(time.Second * 5)
+	readTicker.Stop()
 
 	dataBaseMetrics[READ_METRIC].With(
 		prometheus.Labels{
@@ -197,6 +228,48 @@ func getReadMetricsFor(db *sql.DB, numberOfElements int) {
 			"replicas": databaseReplicas,
 		},
 	).Set(end.Sub(begin).Seconds())
+
+	fmt.Printf("Starting metrics for DELETE with %d objects\n", numberOfElements)
+	deleteTicker := time.NewTicker(defaultTickerDuration)
+	getSystemMetricsForOperation(numberOfElements, DELETE_METRIC, deleteTicker)
+	begin = time.Now()
+	deleteNObjectsFromDb(db, objs[:numberOfElements])
+	end = time.Now()
+	time.Sleep(time.Second * 5)
+	deleteTicker.Stop()
+
+	dataBaseMetrics[DELETE_METRIC].With(prometheus.Labels{
+		"elements": fmt.Sprintf("%d", numberOfElements),
+		"replicas": databaseReplicas,
+	}).Set(end.Sub(begin).Seconds())
+}
+
+func deleteNObjectsFromDb(db *sql.DB, objs []*DataObject) {
+	// tx, err := db.Begin()
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer tx.Rollback()
+
+	sqlStmt := fmt.Sprintf("DELETE FROM %s", tableName)
+
+	db.Exec(sqlStmt)
+
+	// stmt, err := tx.Prepare(sqlStmt)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer stmt.Close()
+
+	// for _, obj := range objs {
+	// 	stmt.Exec(obj.Id)
+	// }
+
+	// err = tx.Commit()
+	// if err != nil {
+	// 	panic(err)
+	// }
+
 }
 
 func cleanDatabase(db *sql.DB) {
@@ -227,61 +300,15 @@ func main() {
 	firstBatch := int(totalElementsOnCsv / 3)    // 33% of elements in database
 	secondBatch := int(totalElementsOnCsv/3) * 2 // 66% of elements in database
 	thirdBatch := totalElementsOnCsv             // 100% of database
-	insertTicker := time.NewTicker(100 * time.Millisecond)
-	go func() {
-		fmt.Printf("Starting proffiling in write\n")
-		for range insertTicker.C {
-			result, _ := cpu.Percent(0, false)
-			systemMetrics[CPU_METRIC].With(
-				prometheus.Labels{
-					"replicas":  databaseReplicas,
-					"operation": "insert",
-				},
-			).Set(result[0])
-			memStat, _ := mem.VirtualMemory()
-			systemMetrics[MEM_METRIC].With(
-				prometheus.Labels{
-					"replicas":  databaseReplicas,
-					"operation": "insert",
-				},
-			).Set(memStat.UsedPercent)
-		}
-	}()
-	fmt.Printf("Starting insert metrics\n")
-	getInsertAndUpdateMetricsFor(db, objs, firstBatch)
-	getInsertAndUpdateMetricsFor(db, objs, secondBatch)
-	getInsertAndUpdateMetricsFor(db, objs, thirdBatch)
-	insertTicker.Stop()
 
-	readTicker := time.NewTicker(100 * time.Millisecond)
-	go func() {
-		fmt.Printf("Starting proffiling in read\n")
-		for range readTicker.C {
-			result, _ := cpu.Percent(0, false)
-			systemMetrics[CPU_METRIC].With(
-				prometheus.Labels{
-					"replicas":  databaseReplicas,
-					"operation": "read",
-				},
-			).Set(result[0])
-			memStat, _ := mem.VirtualMemory()
-			systemMetrics[MEM_METRIC].With(
-				prometheus.Labels{
-					"replicas":  databaseReplicas,
-					"operation": "read",
-				},
-			).Set(memStat.UsedPercent)
-		}
-	}()
-	// Here we have the 100% of elements inserted on database
-	// So we can perform the read operation just limiting the
-	// amount of elements returneds
-	fmt.Printf("Starting read metrics\n")
-	getReadMetricsFor(db, firstBatch)
-	getReadMetricsFor(db, secondBatch)
-	getReadMetricsFor(db, thirdBatch)
-	time.Sleep(5 * time.Second) // We sleep one second to retrieve CPU usage metrics
-	readTicker.Stop()
+	iterations := 0
+	for iterations < 30 {
+		fmt.Printf("Starting metrics for iteration %d\n", iterations)
+		getMetrics(db, objs, firstBatch)
+		getMetrics(db, objs, secondBatch)
+		getMetrics(db, objs, thirdBatch)
+		iterations++
+	}
 
 	wg.Wait()
 }

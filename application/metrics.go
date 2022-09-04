@@ -9,6 +9,7 @@ const (
 	INSERT_METRIC = "insert"
 	READ_METRIC   = "read"
 	UPDATE_METRIC = "update"
+	DELETE_METRIC = "delete"
 	CPU_METRIC    = "cpu"
 	MEM_METRIC    = "memory"
 )
@@ -32,6 +33,13 @@ var (
 		UPDATE_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "database_update",
 			Help: "time (in seconds) taken to update X elements on the database",
+		}, []string{
+			"elements",
+			"replicas",
+		}),
+		DELETE_METRIC: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "database_delete",
+			Help: "time (in seconds) taken to delete X elements on the database",
 		}, []string{
 			"elements",
 			"replicas",
